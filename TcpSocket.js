@@ -33,6 +33,9 @@ function TcpSocket(options: ?{ id: ?number }) {
     return new TcpSocket(options);
   }
 
+  this.corking = false;
+  this.corkingBuffer = [];
+
   if (options && options.id) {
     // e.g. incoming server connections
     this._id = Number(options.id);
@@ -137,6 +140,25 @@ function isLegalPort(port: number): boolean {
     return false;
   }
   return +port === port >>> 0 && port >= 0 && port <= 0xffff;
+}
+
+TcpSocket.prototype.cork = function() {
+  this.corking = true;
+}
+
+TcpSocket.prototype.uncork = function() {
+  var buffer = this.corkingBuffer.map(function(item) {
+    if (typeof item === 'string') {
+      return Buffer.from(item);
+    }
+
+    return item;
+  });
+
+  var result = Buffer.concat(buffer);
+  this.corking = false;
+  this.corkingBuffer = [];
+  this.write(result);
 }
 
 TcpSocket.prototype.read = function (n) {
@@ -358,6 +380,11 @@ TcpSocket.prototype._onError = function (error: string): void {
 };
 
 TcpSocket.prototype.write = function (chunk, encoding, cb) {
+  if (this.corking) {
+    this.corkingBuffer.push(chunk);
+    return chunk.length;
+  }
+
   if (typeof chunk !== 'string' && !Buffer.isBuffer(chunk)) {
     throw new TypeError(
       'Invalid data, chunk must be a string or buffer, not ' + typeof chunk,
@@ -373,6 +400,12 @@ TcpSocket.prototype._write = function (
   callback: ?(err: ?Error) => void,
 ): boolean {
   var self = this;
+
+  if (this.corking) {
+    this.corkingBuffer.push(chunk);
+    callback();
+    return;
+  }
 
   if (this._state === STATE.DISCONNECTED) {
     throw new Error('Socket is not connected.');
